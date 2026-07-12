@@ -3,8 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from DataTransformation import LowPassFilter, PrincipalComponentAnalysis
 from TemporalAbstraction import NumericalAbstraction
-
-
+from FrequencyAbstraction import FourierTransformation
+from sklearn.cluster import KMeans
+%matplotlib inline
+import matplotlib.pyplot as plt
 # --------------------------------------------------------------
 # Load data
 # --------------------------------------------------------------
@@ -79,11 +81,106 @@ df_squared[["acc_r","gyr_r"]].where(df_squared["set"]==35).plot(subplots=True)
 # --------------------------------------------------------------
 # Temporal abstraction
 # --------------------------------------------------------------
+df_temporal=df_squared.copy()
+numabs=NumericalAbstraction()
+predictor_columns=predictor_columns+["acc_r","gyr_r"]
+df_temporal_list=[]
+for s in df_temporal["set"].unique():
+    subset=df_temporal[df_temporal["set"]==s].copy()
+    for col in predictor_columns:
+        subset=numabs.abstract_numerical(subset,[col],window_size=5,aggregation_function="mean")
+        subset=numabs.abstract_numerical(subset,[col],window_size=5,aggregation_function="std")
+        df_temporal_list.append(subset)   
+df_temporal=pd.concat(df_temporal_list)        
 
 
 # --------------------------------------------------------------
 # Frequency features
 # --------------------------------------------------------------
+# --------------------------------------------------------------
+# Frequency Features
+# --------------------------------------------------------------
+
+# Reset the index because the Fourier Transform functions expect a discrete index
+df_freq = df_temporal.copy().reset_index()
+
+# Initialize the Fourier Transformation feature abstraction class
+freq_apps = FourierTransformation()
+
+# Define the sampling rate and window size parameters
+fs = int(1000 / 200)   # Sampling rate: 5 samples per second
+ws = int(2800 / 200)   # Window size: 14 steps (approx. 2.8 second repetition)
+
+# Process the frequency features set by set to prevent data leakage between sessions
+df_freq_list = []
+for s in df_freq["set"].unique():
+    print(f"Applying Fourier Transformations to set {s}")
+    subset = df_freq[df_freq["set"] == s].reset_index(drop=True).copy()
+    subset = freq_apps.abstract_frequency(subset, predictor_columns, ws, fs)
+    df_freq_list.append(subset)
+
+# Concatenate the processed subsets back into a single DataFrame
+df_freq = pd.concat(df_freq_list).set_index("epoch (ms)")
+
+# --------------------------------------------------------------
+# Dealing with overlapping windows
+# --------------------------------------------------------------
+
+# Drop any missing values introduced by the rolling window boundaries
+df_freq = df_freq.dropna()
+
+# Reduce dataset correlation/overfitting by eliminating 50% of row overlap
+df_freq = df_freq.iloc[::2]
+
+# --------------------------------------------------------------
+# Clustering
+# --------------------------------------------------------------
+
+# Define the specific columns to run the clustering algorithm on
+cluster_columns = ["acc_x", "acc_y", "acc_z"]
+df_cluster = df_freq.copy()
+
+# Code segment used during the Elbow Method optimization loop
+k_values = range(2, 10)
+inertias = []
+
+for k in k_values:
+    kmeans = KMeans(n_clusters=k, n_init=20, random_state=0)
+    subset = df_cluster[cluster_columns]
+    kmeans.fit(subset)
+    inertias.append(kmeans.inertia_)
+
+# Train the final K-Means model using the optimized 5 clusters found from the elbow plot
+kmeans = KMeans(n_clusters=5, n_init=20, random_state=0)
+subset = df_cluster[cluster_columns]
+df_cluster["cluster"] = kmeans.fit_predict(subset)
+
+# Plot clusters colored by K-Means unsupervised groups
+fig = plt.figure(figsize=(15, 15))
+ax = fig.add_subplot(projection="3d")
+for c in df_cluster["cluster"].unique():
+    subset = df_cluster[df_cluster["cluster"] == c]
+    ax.scatter(subset["acc_x"], subset["acc_y"], subset["acc_z"], label=c)
+ax.set_xlabel("X-axis")
+ax.set_ylabel("Y-axis")
+ax.set_zlabel("Z-axis")
+plt.legend()
+plt.show()
+
+# Plot accelerometer data split by actual exercise labels for validation comparison
+fig = plt.figure(figsize=(15, 15))
+ax = fig.add_subplot(projection="3d")
+for l in df_cluster["label"].unique():
+    subset = df_cluster[df_cluster["label"] == l]
+    ax.scatter(subset["acc_x"], subset["acc_y"], subset["acc_z"], label=l)
+ax.set_xlabel("X-axis")
+ax.set_ylabel("Y-axis")
+ax.set_zlabel("Z-axis")
+plt.legend()
+plt.show()
+df_cluster.to_pickle("../../data/interim/03_data_features.pkl")
+
+
 
 
 # --------------------------------------------------------------
@@ -93,8 +190,9 @@ df_squared[["acc_r","gyr_r"]].where(df_squared["set"]==35).plot(subplots=True)
 
 # --------------------------------------------------------------
 # Clustering
-# --------------------------------------------------------------
 
+
+# 1. Prepare data
 
 # --------------------------------------------------------------
 # Export dataset
